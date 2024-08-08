@@ -131,6 +131,13 @@ struct proc
   uint64 handler;
   int qentertime;
   int inqueuetime;
+  uint runtime;
+  uint sleepingtime;
+  uint waittime;
+  int scheduling_flag;
+  uint numexec;
+  uint sp;
+  uint rbi;
 };
 
 // #define MLFQ

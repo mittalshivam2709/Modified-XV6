@@ -7,14 +7,14 @@
 #include "defs.h"
 // #define MLFQ
 #ifdef MLFQ
-struct proc* queue1[1000];
-struct proc* queue2[1000];
-struct proc* queue3[1000];
-struct proc* queue4[1000];
-int idx1=-1;
-int idx2=-1;
-int idx3=-1;
-int idx4=-1;
+struct proc *queue1[1000];
+struct proc *queue2[1000];
+struct proc *queue3[1000];
+struct proc *queue4[1000];
+int idx1 = -1;
+int idx2 = -1;
+int idx3 = -1;
+int idx4 = -1;
 
 #endif
 struct cpu cpus[NCPU];
@@ -135,17 +135,23 @@ allocproc(void)
   return 0;
 
 found:
-  #ifdef MLFQ
+#ifdef MLFQ
 
-    // printf("here");
-    queue1[++idx1]=p;
-    p->qidx=idx1;
-  #endif
-  p->ticks=0;
-  p->numreads=0;
+  // printf("here");
+  queue1[++idx1] = p;
+  p->qidx = idx1;
+#endif
+  p->ticks = 0;
+  p->numreads = 0;
   p->pid = allocpid();
   p->state = USED;
-  p->queuenum=1;
+
+  p->sp = 50;
+  p->rbi = 25;
+  p->numexec = 0;
+  p->scheduling_flag = 0;
+
+  p->queuenum = 1;
   // Allocate a trapframe page.
   if ((p->trapframe = (struct trapframe *)kalloc()) == 0)
   {
@@ -170,8 +176,10 @@ found:
   p->context.sp = p->kstack + PGSIZE;
   p->rtime = 0;
   p->etime = 0;
-  p->wtime=0;
-  
+  p->wtime = 0;
+  p->runtime = 0;
+  p->sleepingtime = 0;
+  p->waittime = 0;
   p->ctime = ticks;
   return p;
 }
@@ -474,6 +482,17 @@ int wait(uint64 addr)
 //  - swtch to start running that process.
 //  - eventually that process transfers control
 //    via swtch back to the scheduler.
+
+int min(int a,int b){
+  return a<b?b:a;
+}
+
+int max(int a,int b){
+  return a<b?a:b;
+}
+
+
+#define PBS
 void scheduler(void)
 {
   struct proc *p;
@@ -483,489 +502,705 @@ void scheduler(void)
   {
     // Avoid deadlock by ensuring that devices can interrupt.
     intr_on();
-    // following is for aging
+// following is for aging
 
-    // for (p = proc; p < &proc[NPROC]; p++)
-    // {
-    //     acquire(&p->lock);
-    //     if(p->wtime >= 100){
-    //       p->priority--;
-          
-    //     }
-    // }  
-    #ifdef roundrobin
-    
-      for (p = proc; p < &proc[NPROC]; p++)
-      { 
-        acquire(&p->lock);
-        if (p->state == RUNNABLE)
-        {
-          // Switch to chosen process.  It is the process's job
-          // to release its lock and then reacquire it
-          // before jumping back to us.
-          p->state = RUNNING;
-          c->proc = p;
-          swtch(&c->context, &p->context);
-  
-          // Process is done running for now.
-          // It should have changed its p->state before coming back.
-          c->proc = 0;
-        }
-        release(&p->lock);
-      }
-    #endif
-    #ifdef FCFS
-        // printf("here");
-      struct proc* minm=0;
-      // for (p = proc; p < &proc[NPROC]; p++){
-      //   acquire(&p->lock);
-      // }
-      // minm=(struct proc*)kalloc();
-      // acquire(&minm->lock);
-      for (p = proc; p < &proc[NPROC]; p++)
+// for (p = proc; p < &proc[NPROC]; p++)
+// {
+//     acquire(&p->lock);
+//     if(p->wtime >= 100){
+//       p->priority--;
+
+//     }
+// }
+#ifdef roundrobin
+
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE)
       {
-        acquire(&p->lock);
-        if (p->state != RUNNABLE){
-          release(&p->lock);
-          continue;
-        }
-        
-          if(minm==0){
-            // printf("here");
-            minm=p;
-          }
-          else{
-            acquire(&minm->lock);
-                if(p->ctime<minm->ctime){
-                  minm=p;
-                }
-            release(&minm->lock);
-          }
-        // printf("%d",minm->ctime);
-        release(&p->lock);
-      }
-
-      // printf("%d",minm->ctime);
-      // for (p = proc; p < &proc[NPROC]; p++){
-      //   release(&p->lock);
-      // }
-      if(minm==0){
-        continue;
-      }
-      acquire(&minm->lock);
-      if(minm->state==RUNNABLE){
         // Switch to chosen process.  It is the process's job
         // to release its lock and then reacquire it
         // before jumping back to us.
-        minm->state = RUNNING;
-        c->proc = minm;
-        swtch(&c->context, &minm->context);
+        p->state = RUNNING;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
       }
-      release(&minm->lock);
-    #endif
-    #ifdef MLFQ
-      for (p = proc; p < &proc[NPROC]; p++){
-          acquire(&p->lock);
-          if(p->state==RUNNABLE || p->state==RUNNING){
-            int val=p->queuenum;
-            int pid=p->pid;
-            release(&p->lock);
-            if(val==1){
-              int f=0;
-              for (int i = 0; i <= idx1; i++){
-                acquire(&queue1[i]->lock);
-                if(queue1[i]->pid==pid){
-                  f=1;
-                  release(&queue1[i]->lock);
-                  break;
-                }
-                release(&queue1[i]->lock);
-              }
-              if(f==0){
-                queue1[++idx1]=p;
-              }
-          }
-          else if(val==2){
-            int f=0;
-            for (int i = 0; i <= idx2; i++){
-              acquire(&queue2[i]->lock);
-              if(queue2[i]->pid==pid){
-                f=1;
-                release(&queue2[i]->lock);
-                break;
-              }
-              release(&queue2[i]->lock);
-            }
-            if(f==0){
-              queue2[++idx2]=p;
-            }
-          }
-          else if(val==3){
-            int f=0;
-            for (int i = 0; i <= idx3; i++){
-              acquire(&queue3[i]->lock);
-              if(queue3[i]->pid==pid){
-                f=1;
-                release(&queue3[i]->lock);
-                break;
-              }
-              release(&queue3[i]->lock);
-            }
-            if(f==0){
-              queue3[++idx3]=p;
-            }
-          }
-          else if(val==4){
-            int f=0;
-            for (int i = 0; i <= idx4; i++){
-              acquire(&queue4[i]->lock);
-              if(queue4[i]->pid==pid){
-                f=1;
-                release(&queue4[i]->lock);
-                break;
-              }
-              release(&queue4[i]->lock);
-            }
-            if(f==0){
-              queue4[++idx4]=p;
-            }
-          }
-        }
-        else{
-          release(&p->lock);
-        }
+      release(&p->lock);
+    }
+#endif
+#ifdef FCFS
+    // printf("here");
+    struct proc *minm = 0;
+    // for (p = proc; p < &proc[NPROC]; p++){
+    //   acquire(&p->lock);
+    // }
+    // minm=(struct proc*)kalloc();
+    // acquire(&minm->lock);
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state != RUNNABLE)
+      {
+        release(&p->lock);
+        continue;
       }
-      // for (p = proc; p < &proc[NPROC]; p++){
-      //     acquire(&p->lock);
-      //     if(p->state!=RUNNABLE && p->state !=UNUSED){
-      //       // printf("inside this remove loop for %s for state %d ",p->name,p->state);
-      //         int qnum=p->queuenum;
-      //         int index=p->qidx;
-      //         if(index==-1){
-      //           release(&p->lock);
-      //           continue;
-      //         }
-      //         int maxidx;
-      //         p->qidx=-1;
-      //         if(qnum==1){
-      //           maxidx=idx1;
-      //           for (int i = index; i < maxidx; i++){
-      //             queue1[i]=queue1[i+1];
-      //           }
-      //           idx1--;
-      //         }
-      //         else if(qnum==2){
-      //           maxidx=idx2;
-      //           for (int i = index; i < maxidx; i++){
-      //           queue2[i]=queue2[i+1];
-      //           }
-      //           idx2--;
-      //         }
-      //         else if(qnum==3){
-      //           maxidx=idx3;
-      //           for (int i = index; i < maxidx; i++){
-      //             queue3[i]=queue3[i+1];
-      //           }
-      //           idx3--;
-      //         }
-      //         else if(qnum==4){
-      //           maxidx=idx4;
-      //           for (int i = index; i < maxidx; i++){
-      //             queue4[i]=queue4[i+1];
-      //           }
-      //           idx4--;
-      //         }
-      //         release(&p->lock);
-      //     }
-      //     else{
-      //       release(&p->lock);
-      //     }
-      // }  
-      
-      // for (int i = 0; i<= idx1; i++){
-      //   acquire(&queue1[i]->lock);
-      //   if(queue1[i]->isfinished==1){
-      //     printf("removing");
-      //     release(&queue1[i]->lock);
-      //     for (int j = i; j < idx1; j++){
-      //       queue1[i]=queue1[i+1];
-      //     }
-      //     idx1--;
-      //   }else{
-      //     release(&queue1[i]->lock);
-      //   }
-      // }
-      // for (int i = 0; i<= idx4; i++){
-      //   acquire(&queue4[i]->lock);
-      //   if(queue4[i]->isfinished==1){
-      //     printf("  hatadiya  ");
-      //     printf("%s ",queue4[i]->name);
-      //     release(&queue4[i]->lock);
-      //     for (int j = i; j < idx4; j++){
-      //       queue4[i]=queue4[i+1];
-      //     }
-      //     idx4--;
-      //   }else{
-      //     release(&queue4[i]->lock);
-      //   }
-      // }
-      int executed=0;
-      // printf(" %d  ",idx1);
-      if(idx1>-1){
-        // printf("\n");
-        // procdump();
-          for (int i=0; i <= idx1; i++){
+
+      if (minm == 0)
+      {
+        // printf("here");
+        minm = p;
+      }
+      else
+      {
+        acquire(&minm->lock);
+        if (p->ctime < minm->ctime)
+        {
+          minm = p;
+        }
+        release(&minm->lock);
+      }
+      // printf("%d",minm->ctime);
+      release(&p->lock);
+    }
+
+    // printf("%d",minm->ctime);
+    // for (p = proc; p < &proc[NPROC]; p++){
+    //   release(&p->lock);
+    // }
+    if (minm == 0)
+    {
+      continue;
+    }
+    acquire(&minm->lock);
+    if (minm->state == RUNNABLE)
+    {
+      // Switch to chosen process.  It is the process's job
+      // to release its lock and then reacquire it
+      // before jumping back to us.
+      minm->state = RUNNING;
+      c->proc = minm;
+      swtch(&c->context, &minm->context);
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+    }
+    release(&minm->lock);
+#endif
+#ifdef MLFQ
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->state == RUNNABLE || p->state == RUNNING)
+      {
+        int val = p->queuenum;
+        int pid = p->pid;
+        release(&p->lock);
+        if (val == 1)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx1; i++)
+          {
             acquire(&queue1[i]->lock);
-            if(queue1[i]->state!=RUNNABLE &&queue1[i]->state !=RUNNING){
+            if (queue1[i]->pid == pid)
+            {
+              f = 1;
               release(&queue1[i]->lock);
-              for (int j = i; j < idx1; j++){
-                queue1[j]=queue1[j+1];
-              }
-              idx1--;
-              i--;  
-              // break;
-              continue;
-            }
-            if(idx1<0){
               break;
             }
-            // i have the runnable process now
-            // printf("ok");
-            p=queue1[i]; 
-            // printf("rtime is %d for %d ",p->rtime,p->pid);
-            // acquire(&p->lock);
-            p->state=RUNNING;
-            p->ticks++;
-            p->wtime=0;
-            c->proc = p;
-            swtch(&c->context, &p->context);
-            // Process is done running for now.
-            // It should have changed its p->state before coming back.
-            // printf("rtime is %d for %d \n",p->rtime,p->pid);
-            c->proc = 0;
-            if(p->pid ==0 ){
-              for (int j = i; j < idx1; j++){
-                queue1[j]=queue1[j+1];
-              }
-              idx1--;
-              release(&p->lock);
-              executed=1;
+            release(&queue1[i]->lock);
+          }
+          if (f == 0)
+          {
+            queue1[++idx1] = p;
+          }
+        }
+        else if (val == 2)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx2; i++)
+          {
+            acquire(&queue2[i]->lock);
+            if (queue2[i]->pid == pid)
+            {
+              f = 1;
+              release(&queue2[i]->lock);
               break;
             }
-            if(p->ticks >= 1){
-              // printf("here");
-              p->queuenum=2;
-              queue2[++idx2]=p;
-              p->qidx=idx2;
-              // printf("%d ",idx2);
-              for (int j = i; j < idx1; j++){
-                queue1[j]=queue1[j+1];
-              }
-              idx1--;
-              p->ticks=0;
-              p->wtime=0;
+            release(&queue2[i]->lock);
+          }
+          if (f == 0)
+          {
+            queue2[++idx2] = p;
+          }
+        }
+        else if (val == 3)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx3; i++)
+          {
+            acquire(&queue3[i]->lock);
+            if (queue3[i]->pid == pid)
+            {
+              f = 1;
+              release(&queue3[i]->lock);
+              break;
             }
-            release(&p->lock);
-            executed=1;break;
+            release(&queue3[i]->lock);
           }
-          if(executed==1){
-            // printf("contining");
-            continue;
+          if (f == 0)
+          {
+            queue3[++idx3] = p;
           }
+        }
+        else if (val == 4)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx4; i++)
+          {
+            acquire(&queue4[i]->lock);
+            if (queue4[i]->pid == pid)
+            {
+              f = 1;
+              release(&queue4[i]->lock);
+              break;
+            }
+            release(&queue4[i]->lock);
+          }
+          if (f == 0)
+          {
+            queue4[++idx4] = p;
+          }
+        }
       }
-      if(idx2>-1){
-        // printf("\n");
+      else
+      {
+        release(&p->lock);
+      }
+    }
+    // for (p = proc; p < &proc[NPROC]; p++){
+    //     acquire(&p->lock);
+    //     if(p->state!=RUNNABLE && p->state !=UNUSED){
+    //       // printf("inside this remove loop for %s for state %d ",p->name,p->state);
+    //         int qnum=p->queuenum;
+    //         int index=p->qidx;
+    //         if(index==-1){
+    //           release(&p->lock);
+    //           continue;
+    //         }
+    //         int maxidx;
+    //         p->qidx=-1;
+    //         if(qnum==1){
+    //           maxidx=idx1;
+    //           for (int i = index; i < maxidx; i++){
+    //             queue1[i]=queue1[i+1];
+    //           }
+    //           idx1--;
+    //         }
+    //         else if(qnum==2){
+    //           maxidx=idx2;
+    //           for (int i = index; i < maxidx; i++){
+    //           queue2[i]=queue2[i+1];
+    //           }
+    //           idx2--;
+    //         }
+    //         else if(qnum==3){
+    //           maxidx=idx3;
+    //           for (int i = index; i < maxidx; i++){
+    //             queue3[i]=queue3[i+1];
+    //           }
+    //           idx3--;
+    //         }
+    //         else if(qnum==4){
+    //           maxidx=idx4;
+    //           for (int i = index; i < maxidx; i++){
+    //             queue4[i]=queue4[i+1];
+    //           }
+    //           idx4--;
+    //         }
+    //         release(&p->lock);
+    //     }
+    //     else{
+    //       release(&p->lock);
+    //     }
+    // }
+
+    // for (int i = 0; i<= idx1; i++){
+    //   acquire(&queue1[i]->lock);
+    //   if(queue1[i]->isfinished==1){
+    //     printf("removing");
+    //     release(&queue1[i]->lock);
+    //     for (int j = i; j < idx1; j++){
+    //       queue1[i]=queue1[i+1];
+    //     }
+    //     idx1--;
+    //   }else{
+    //     release(&queue1[i]->lock);
+    //   }
+    // }
+    // for (int i = 0; i<= idx4; i++){
+    //   acquire(&queue4[i]->lock);
+    //   if(queue4[i]->isfinished==1){
+    //     printf("  hatadiya  ");
+    //     printf("%s ",queue4[i]->name);
+    //     release(&queue4[i]->lock);
+    //     for (int j = i; j < idx4; j++){
+    //       queue4[i]=queue4[i+1];
+    //     }
+    //     idx4--;
+    //   }else{
+    //     release(&queue4[i]->lock);
+    //   }
+    // }
+    int executed = 0;
+    // printf(" %d  ",idx1);
+    if (idx1 > -1)
+    {
+      // printf("\n");
+      // procdump();
+      for (int i = 0; i <= idx1; i++)
+      {
+        acquire(&queue1[i]->lock);
+        if (queue1[i]->state != RUNNABLE && queue1[i]->state != RUNNING)
+        {
+          release(&queue1[i]->lock);
+          for (int j = i; j < idx1; j++)
+          {
+            queue1[j] = queue1[j + 1];
+          }
+          idx1--;
+          i--;
+          // break;
+          continue;
+        }
+        if (idx1 < 0)
+        {
+          break;
+        }
+        // i have the runnable process now
+        // printf("ok");
+        p = queue1[i];
+        // printf("rtime is %d for %d ",p->rtime,p->pid);
+        // acquire(&p->lock);
+        p->state = RUNNING;
+        p->ticks++;
+        p->wtime = 0;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        // printf("rtime is %d for %d \n",p->rtime,p->pid);
+        c->proc = 0;
+        if (p->pid == 0)
+        {
+          for (int j = i; j < idx1; j++)
+          {
+            queue1[j] = queue1[j + 1];
+          }
+          idx1--;
+          release(&p->lock);
+          executed = 1;
+          break;
+        }
+        if (p->ticks >= 1)
+        {
+          // printf("here");
+          p->queuenum = 2;
+          queue2[++idx2] = p;
+          p->qidx = idx2;
+          // printf("%d ",idx2);
+          for (int j = i; j < idx1; j++)
+          {
+            queue1[j] = queue1[j + 1];
+          }
+          idx1--;
+          p->ticks = 0;
+          p->wtime = 0;
+        }
+        release(&p->lock);
+        executed = 1;
+        break;
+      }
+      if (executed == 1)
+      {
+        // printf("contining");
+        continue;
+      }
+    }
+    if (idx2 > -1)
+    {
+      // printf("\n");
 
       // procdump();
 
-          for (int i=0; i <= idx2; i++){
-            acquire(&queue2[i]->lock);
-            if(queue2[i]->state!=RUNNABLE&&queue2[i]->state !=RUNNING){
-              release(&queue2[i]->lock);
-              for (int j = i; j < idx2; j++){
-                queue2[j]=queue2[j+1];
-              }
-              idx2--;
-              i--;  
-              // break;
-              continue;
-            }
-            if(idx2<0){
-              break;
-            }
-          // printf("idx2");
-            // i have the runnable process now
-            p=queue2[i]; 
-            // printf("rtime is %d for %d ",p->rtime,p->pid);
-            // acquire(&p->lock);
-            p->state=RUNNING;
-            p->ticks++;
-            p->wtime=0;
-            c->proc = p;
-            swtch(&c->context, &p->context);
-            // Process is done running for now.
-            // It should have changed its p->state before coming back.
-            // printf("rtime is %d for %d \n",p->rtime,p->pid);
-            c->proc = 0;
-            if(p->pid ==0 ){
-              for (int j = i; j < idx2; j++){
-                queue2[j]=queue2[j+1];
-              }
-              idx2--;
-              i--;
-              // release(&p->lock);
-              executed=1;
-              break;
-            }
-            if(p->ticks >= 3){
-              // printf("here");
-              p->queuenum=3;
-              queue3[++idx3]=p;
-              p->qidx=idx3;
-
-              for (int j = i; j < idx2; j++){
-                queue2[j]=queue2[j+1];
-              }
-              idx2--;
-              i--;
-              p->ticks=0;
-              p->wtime=0;
-            }
-            release(&p->lock);
-            executed=1;break;
+      for (int i = 0; i <= idx2; i++)
+      {
+        acquire(&queue2[i]->lock);
+        if (queue2[i]->state != RUNNABLE && queue2[i]->state != RUNNING)
+        {
+          release(&queue2[i]->lock);
+          for (int j = i; j < idx2; j++)
+          {
+            queue2[j] = queue2[j + 1];
           }
-          if(executed==1){
-            continue;
+          idx2--;
+          i--;
+          // break;
+          continue;
+        }
+        if (idx2 < 0)
+        {
+          break;
+        }
+        // printf("idx2");
+        // i have the runnable process now
+        p = queue2[i];
+        // printf("rtime is %d for %d ",p->rtime,p->pid);
+        // acquire(&p->lock);
+        p->state = RUNNING;
+        p->ticks++;
+        p->wtime = 0;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        // printf("rtime is %d for %d \n",p->rtime,p->pid);
+        c->proc = 0;
+        if (p->pid == 0)
+        {
+          for (int j = i; j < idx2; j++)
+          {
+            queue2[j] = queue2[j + 1];
           }
-      }
-      
-      if(idx3>-1){
-        // printf("\n");
-
-        // procdump();
-          for (int i=0; i <= idx3; i++){
+          idx2--;
+          i--;
+          // release(&p->lock);
+          executed = 1;
+          break;
+        }
+        if (p->ticks >= 3)
+        {
           // printf("here");
-            acquire(&queue3[i]->lock);
-            if(queue3[i]->state!=RUNNABLE&&queue3[i]->state !=RUNNING){
-              release(&queue3[i]->lock);
-              for (int j = i; j < idx3; j++){
-                queue3[j]=queue3[j+1];
-              }
-              idx3--;
-              i--;  
-              // break;
-              continue;
-            }
-            if(idx3<0){
-              break;
-            }
-            // i have the runnable process now
-            p=queue3[i]; 
-            // printf("rtime is %d for %d ",p->rtime,p->pid);
-            // acquire(&p->lock);
-            p->state=RUNNING;
-            p->ticks++;
-            p->wtime=0;
-            c->proc = p;
-            swtch(&c->context, &p->context);
-            // Process is done running for now.
-            // It should have changed its p->state before coming back.
-            // printf("rtime is %d for %d \n",p->rtime,p->pid);
-            c->proc = 0;
-            if(p->pid ==0 ){
-              for (int j = i; j < idx3; j++){
-                queue3[j]=queue3[j+1];
-              }
-              idx3--;
-              i--;
-              release(&p->lock);
-              executed=1;
-              break;
-            }
-            if(p->ticks >= 9){
-              // printf("here");
-              p->queuenum=4;
-              queue4[++idx4]=p;
-              p->qidx=idx4;
+          p->queuenum = 3;
+          queue3[++idx3] = p;
+          p->qidx = idx3;
 
-              for (int j = i; j < idx3; j++){
-                queue3[j]=queue3[j+1];
-              }
-              idx3--;
-              i--;
-              p->ticks=0;
-              p->wtime=0;
-            }
-            release(&p->lock);
-            executed=1;break;
+          for (int j = i; j < idx2; j++)
+          {
+            queue2[j] = queue2[j + 1];
           }
-          if(executed==1){
-            continue;
-          }
+          idx2--;
+          i--;
+          p->ticks = 0;
+          p->wtime = 0;
+        }
+        release(&p->lock);
+        executed = 1;
+        break;
       }
-      if(idx4>-1){
-        // printf("\n");
-        // procdump();
-          for (int i=0; i <= idx4; i++){
+      if (executed == 1)
+      {
+        continue;
+      }
+    }
+
+    if (idx3 > -1)
+    {
+      // printf("\n");
+
+      // procdump();
+      for (int i = 0; i <= idx3; i++)
+      {
+        // printf("here");
+        acquire(&queue3[i]->lock);
+        if (queue3[i]->state != RUNNABLE && queue3[i]->state != RUNNING)
+        {
+          release(&queue3[i]->lock);
+          for (int j = i; j < idx3; j++)
+          {
+            queue3[j] = queue3[j + 1];
+          }
+          idx3--;
+          i--;
+          // break;
+          continue;
+        }
+        if (idx3 < 0)
+        {
+          break;
+        }
+        // i have the runnable process now
+        p = queue3[i];
+        // printf("rtime is %d for %d ",p->rtime,p->pid);
+        // acquire(&p->lock);
+        p->state = RUNNING;
+        p->ticks++;
+        p->wtime = 0;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        // printf("rtime is %d for %d \n",p->rtime,p->pid);
+        c->proc = 0;
+        if (p->pid == 0)
+        {
+          for (int j = i; j < idx3; j++)
+          {
+            queue3[j] = queue3[j + 1];
+          }
+          idx3--;
+          i--;
+          release(&p->lock);
+          executed = 1;
+          break;
+        }
+        if (p->ticks >= 9)
+        {
           // printf("here");
-            acquire(&queue4[i]->lock);
-            if(queue4[i]->state!=RUNNABLE&&queue4[i]->state !=RUNNING){
-              release(&queue4[i]->lock);
-              for (int j = i; j < idx4; j++){
-                queue4[j]=queue4[j+1];
-              }
-              idx4--;
-              i--;  
-              // break;
-              continue;
-            }
-            // // i have the runnable process now
+          p->queuenum = 4;
+          queue4[++idx4] = p;
+          p->qidx = idx4;
 
-            // if(idx4<0){
-            //   break;
-            // }
-            p=queue4[i]; 
-            // printf("rtime is %d for %d ",p->rtime,p->pid);
-            // acquire(&p->lock);
-            p->state=RUNNING;
-            p->ticks++;
-            p->wtime=0;
-            c->proc = p;
-            swtch(&c->context, &p->context);
-            // Process is done running for now.
-            // It should have changed its p->state before coming back.
-            // printf("rtime is %d for %d \n",p->rtime,p->pid);
-            c->proc = 0;
-            if(p->pid ==0 ){
-              for (int j = i; j < idx4; j++){
-                queue4[j]=queue4[j+1];
-              }
-              idx4--;
-              release(&p->lock);
-              executed=1;
-              break;
-            }
-            if(p->ticks >= 15){
-              // printf("here");
-              p->queuenum=4;
-              for (int j = i; j < idx4; j++){
-                queue4[j]=queue4[j+1];
-              }
-              queue4[idx4]=p;
-              p->ticks=0;
-              p->wtime=0;
-            }
-            release(&p->lock);
-            executed=1;break;
+          for (int j = i; j < idx3; j++)
+          {
+            queue3[j] = queue3[j + 1];
           }
-          if(executed==1){
+          idx3--;
+          i--;
+          p->ticks = 0;
+          p->wtime = 0;
+        }
+        release(&p->lock);
+        executed = 1;
+        break;
+      }
+      if (executed == 1)
+      {
+        continue;
+      }
+    }
+    if (idx4 > -1)
+    {
+      // printf("\n");
+      // procdump();
+      for (int i = 0; i <= idx4; i++)
+      {
+        // printf("here");
+        acquire(&queue4[i]->lock);
+        if (queue4[i]->state != RUNNABLE && queue4[i]->state != RUNNING)
+        {
+          release(&queue4[i]->lock);
+          for (int j = i; j < idx4; j++)
+          {
+            queue4[j] = queue4[j + 1];
+          }
+          idx4--;
+          i--;
+          // break;
+          continue;
+        }
+        // // i have the runnable process now
+
+        // if(idx4<0){
+        //   break;
+        // }
+        p = queue4[i];
+        // printf("rtime is %d for %d ",p->rtime,p->pid);
+        // acquire(&p->lock);
+        p->state = RUNNING;
+        p->ticks++;
+        p->wtime = 0;
+        c->proc = p;
+        swtch(&c->context, &p->context);
+        // Process is done running for now.
+        // It should have changed its p->state before coming back.
+        // printf("rtime is %d for %d \n",p->rtime,p->pid);
+        c->proc = 0;
+        if (p->pid == 0)
+        {
+          for (int j = i; j < idx4; j++)
+          {
+            queue4[j] = queue4[j + 1];
+          }
+          idx4--;
+          release(&p->lock);
+          executed = 1;
+          break;
+        }
+        if (p->ticks >= 15)
+        {
+          // printf("here");
+          p->queuenum = 4;
+          for (int j = i; j < idx4; j++)
+          {
+            queue4[j] = queue4[j + 1];
+          }
+          queue4[idx4] = p;
+          p->ticks = 0;
+          p->wtime = 0;
+        }
+        release(&p->lock);
+        executed = 1;
+        break;
+      }
+      if (executed == 1)
+      {
+        continue;
+      }
+    }
+#endif
+#ifdef PBS
+    // this for loop selects the process to be executed
+    // procdump();printf("\n");
+    // printf("scheduling..\n");
+    // printf("searching..\n");
+
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      acquire(&p->lock);
+      if (p->scheduling_flag == 0)
+      {
+        p->scheduling_flag = 1;
+        release(&p->lock);
+        continue;
+      }
+      int val = (3 * p->runtime) - p->sleepingtime - p->waittime;
+      val *= 50;
+
+      // printf("before %d ",(val));
+      if (val / (p->runtime + p->sleepingtime + p->waittime + 1) <= 0)
+      {
+        val /= (p->runtime + p->sleepingtime + p->waittime + 1);
+      }
+      // printf("divided by %d ",(p->rtime + p->sleepingtime + p->waittime + 1));
+      // printf("after %d ",(val));
+
+      val = max(val, 0);
+      p->rbi = val;
+      release(&p->lock);
+    }
+    struct proc *process_tbexec = 0;
+    int count = 0;
+    for (p = proc; p < &proc[NPROC]; p++)
+    {
+      count++;
+      acquire(&p->lock);
+      // printf("%d\t", count);
+      // if(p->state!=RUNNABLE && p->state!=RUNNING){
+      //   printf("2\t");
+      //   release(&p->lock);
+      //   continue;
+      // }
+      if (p->state == RUNNABLE)
+      {
+        // printf("3\t");
+        if (process_tbexec == 0)
+        {
+          // printf("==0 condn done\t");
+          process_tbexec = p;
+          release(&p->lock);
+          continue;
+        }
+        // printf("5\t");
+        int dp = min(p->sp + p->rbi, 100);
+        int nexec = p->numexec;
+        int starttime = p->ctime;
+        release(&p->lock);
+        acquire(&process_tbexec->lock);
+        if (min(process_tbexec->sp + process_tbexec->rbi, 100) < dp)
+        {
+          // the value of dp of the current process is more which implies less priority of the current process
+          // printf("6\t");
+          release(&process_tbexec->lock);
+          continue;
+        }
+        else
+        {
+          if (min(process_tbexec->sp + process_tbexec->rbi, 100) > dp)
+          {
+            // the value of the priority of current process is less which implies higher priority
+            // printf("7\t");
+            release(&process_tbexec->lock);
+            process_tbexec = p;
             continue;
           }
+          else
+          {
+            // the values are equal
+            // scheduling the process with less num of executions
+            // printf("8\t");
+            if (process_tbexec->numexec < nexec)
+            {
+              // printf("9\t");
+              release(&process_tbexec->lock);
+              continue;
+            }
+            else if (process_tbexec->numexec > nexec)
+            {
+              // printf("10\t");
+              release(&process_tbexec->lock);
+              process_tbexec = p;
+              continue;
+            }
+            else
+            {
+              // executed same number of times compare the startime
+              // printf("11\t");
+              if (process_tbexec->ctime <= starttime)
+              {
+                // printf("12\t");
+                release(&process_tbexec->lock);
+                continue;
+              }
+              else
+              {
+                // printf("13\t");
+                release(&process_tbexec->lock);
+                process_tbexec = p;
+                continue;
+              }
+            }
+          }
+        }
       }
-    #endif   
+      else
+      {
+        release(&p->lock);
+      }
+    }
+
+    // execute the selected process
+    // printf("\nsearched\n");
+    // procdump();
+    if (process_tbexec == 0)
+    {
+      // printf("left");
+      continue;
+    }
+    // //printf("111111111");
+    acquire(&process_tbexec->lock);
+    if (process_tbexec->state == RUNNABLE)
+    {
+      // procdump();
+      process_tbexec->numexec++;
+      process_tbexec->state = RUNNING;
+      c->proc = process_tbexec;
+      process_tbexec->runtime = 0;
+      process_tbexec->sleepingtime = 0;
+      swtch(&c->context, &process_tbexec->context);
+      // Process is done running for now.
+      // It should have changed its p->state before coming back.
+      c->proc = 0;
+    }
+    release(&process_tbexec->lock);
+
+    // update rbi for all processes
+
+#endif
   }
 }
 
@@ -1058,8 +1293,8 @@ void sleep(void *chan, struct spinlock *lk)
 // Wake up all processes sleeping on chan.
 // Must be called without any p->lock.
 
-      #ifdef MLFQ
-void wakeup(void *chan) 
+#ifdef MLFQ
+void wakeup(void *chan)
 {
   struct proc *p;
 
@@ -1071,72 +1306,89 @@ void wakeup(void *chan)
       if (p->state == SLEEPING && p->chan == chan)
       {
         p->state = RUNNABLE;
-        int pid=p->pid;
-        int val=p->queuenum;
+        int pid = p->pid;
+        int val = p->queuenum;
         release(&p->lock);
-        if(val==1){
-          int f=0;
-          for (int i = 0; i <= idx1; i++){
+        if (val == 1)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx1; i++)
+          {
             acquire(&queue1[i]->lock);
-            if(queue1[i]->pid==pid){
-              f=1;
+            if (queue1[i]->pid == pid)
+            {
+              f = 1;
               release(&queue1[i]->lock);
               break;
             }
             release(&queue1[i]->lock);
           }
-          if(f==0){
-            queue1[++idx1]=p;
+          if (f == 0)
+          {
+            queue1[++idx1] = p;
           }
         }
-        else if(val==2){
-          int f=0;
-          for (int i = 0; i <= idx2; i++){
+        else if (val == 2)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx2; i++)
+          {
             acquire(&queue2[i]->lock);
-            if(queue2[i]->pid==pid){
-              f=1;
+            if (queue2[i]->pid == pid)
+            {
+              f = 1;
               release(&queue2[i]->lock);
               break;
             }
             release(&queue2[i]->lock);
           }
-          if(f==0){
-            queue2[++idx2]=p;
+          if (f == 0)
+          {
+            queue2[++idx2] = p;
           }
         }
-        else if(val==3){
-          int f=0;
-          for (int i = 0; i <= idx3; i++){
+        else if (val == 3)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx3; i++)
+          {
             acquire(&queue3[i]->lock);
-            if(queue3[i]->pid==pid){
-              f=1;
+            if (queue3[i]->pid == pid)
+            {
+              f = 1;
               release(&queue3[i]->lock);
               break;
             }
             release(&queue3[i]->lock);
           }
-          if(f==0){
-            queue3[++idx3]=p;
+          if (f == 0)
+          {
+            queue3[++idx3] = p;
           }
         }
-        else if(val==4){
-          int f=0;
-          for (int i = 0; i <= idx4; i++){
+        else if (val == 4)
+        {
+          int f = 0;
+          for (int i = 0; i <= idx4; i++)
+          {
             acquire(&queue4[i]->lock);
-            if(queue4[i]->pid==pid){
-              f=1;
+            if (queue4[i]->pid == pid)
+            {
+              f = 1;
               release(&queue4[i]->lock);
               break;
             }
             release(&queue4[i]->lock);
           }
-          if(f==0){
-            queue4[++idx4]=p;
+          if (f == 0)
+          {
+            queue4[++idx4] = p;
           }
         }
       }
-      else{
-      release(&p->lock);
+      else
+      {
+        release(&p->lock);
       }
     }
   }
@@ -1241,7 +1493,8 @@ int killed(struct proc *p)
 int either_copyout(int user_dst, uint64 dst, void *src, uint64 len)
 {
   struct proc *p = myproc();
-  if (user_dst){
+  if (user_dst)
+  {
     return copyout(p->pagetable, dst, src, len);
   }
   else
@@ -1288,33 +1541,36 @@ void procdump(void)
   {
     if (p->state == UNUSED)
       continue;
-      // state = states[p->state];
+    // state = states[p->state];
     if (p->state >= 0 && p->state < NELEM(states) && states[p->state])
       state = states[p->state];
     else
       state = "???";
-    #ifdef MLFQ
-    printf("%d %d %d %d ",idx1,idx2,idx3,idx4);
-    if(idx1==-1 && idx2==-1 && idx3==-1 && idx4==-1){
-      printf("%d %d %s %s", p->pid,p->queuenum, state, p->name);
+#ifdef MLFQ
+    printf("%d %d %d %d ", idx1, idx2, idx3, idx4);
+    if (idx1 == -1 && idx2 == -1 && idx3 == -1 && idx4 == -1)
+    {
+      printf("%d %d %s %s", p->pid, p->queuenum, state, p->name);
     }
-    #endif 
-    #ifdef FCFS
+#endif
+#ifdef FCFS
     printf("fcfs");
-    #endif
+#endif
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
+#ifdef PBS
+    printf("%d %s %s %d %d %d %d %d", p->pid, state, p->name, min(p->sp + p->rbi, 100), p->rbi, p->runtime, p->waittime, p->sleepingtime);
+#endif
     // for (int i = 0; i < idx4+1; i++)
     // {
     //   acquire(&queue4[i]->lock);
     //   printf("%d ",queue4[i]->pid);
     //   release(&queue4[i]->lock);
     // }
-    
+
     // for (int i = 0; i <= idx3; i++){
     //   printf(" %d ",queue3[i]->pid);
     // }
-    
   }
 }
 
