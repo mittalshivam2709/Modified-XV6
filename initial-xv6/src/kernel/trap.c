@@ -31,6 +31,58 @@ void trapinithart(void)
 // handle an interrupt, exception, or system call from user space.
 // called from trampoline.S
 //
+
+
+int handling_exception(void *va, pagetable_t pagetable){
+
+  struct proc *p = myproc();
+  uint64 va1 = (uint64)va;
+
+  if (va1 < MAXVA){
+    if (va1 < PGROUNDDOWN(p->trapframe->sp) - PGSIZE || va1 > PGROUNDDOWN(p->trapframe->sp)){
+      uint64 page;uint flags;pte_t *pte;
+
+      va = (void *)PGROUNDDOWN((uint64)va);
+      pte = walk(pagetable, (uint64)va, 0);
+
+      if (pte == 0){
+        return -1;
+      }
+      page = PTE2PA(*pte);
+      if (page == 0)
+      {
+        return -1;
+      }
+
+      int val = flags = PTE_FLAGS(*pte);
+      val = val & PTE_COW;
+
+      if (val != 0)
+      {
+        flags = (~PTE_COW) & (flags | PTE_W);
+        char *mem = kalloc(); // increment the count inside kalloc for mem
+        if (mem)
+        {
+          memmove(mem, (void *)page, PGSIZE); // copy the page
+          kfree((void *)page);                // decrement the count for page inside kfree
+          *pte = flags | PA2PTE(mem);
+          return 0;
+        }
+        else
+        {
+          return -1;
+        }
+      }
+    }
+  }
+  else
+  {
+    return 1;
+  }
+  return -1;
+}
+
+
 void usertrap(void)
 {
   int which_dev = 0;
@@ -72,6 +124,18 @@ void usertrap(void)
   else if ((which_dev = devintr()) != 0)
   {
     // ok
+  }
+      else if (r_scause() == 15)
+  {
+    if (r_stval()){
+      int retval = handling_exception((void *)r_stval(), p->pagetable); // this updates the new value by 1 and decreases the old value by 1
+      if(retval!=1 && retval!=-1){}
+      else{
+        p->killed = 1;
+      }
+    }
+    else
+      p->killed = 1;
   }
   else
   {

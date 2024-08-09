@@ -302,13 +302,15 @@ uvmfree(pagetable_t pagetable, uint64 sz)
 // physical memory.
 // returns 0 on success, -1 on failure.
 // frees any allocated pages on failure.
+
 int
 uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
 {
   pte_t *pte;
   uint64 pa, i;
   uint flags;
-  char *mem;
+  // char *mem;
+  // don't do the kalloc
 
   for(i = 0; i < sz; i += PGSIZE){
     if((pte = walk(old, i, 0)) == 0)
@@ -317,11 +319,21 @@ uvmcopy(pagetable_t old, pagetable_t new, uint64 sz)
       panic("uvmcopy: page not present");
     pa = PTE2PA(*pte);
     flags = PTE_FLAGS(*pte);
-    if((mem = kalloc()) == 0)
-      goto err;
-    memmove(mem, (char*)pa, PGSIZE);
-    if(mappages(new, i, PGSIZE, (uint64)mem, flags) != 0){
-      kfree(mem);
+    // don't do the kalloc
+
+    // if((mem = kalloc()) == 0)
+    //   goto err;
+    // memmove(mem, (char*)pa, PGSIZE);
+    // set write flag
+    if (flags & PTE_W){
+      flags = (flags & (~PTE_W)) | PTE_COW;
+      *pte = PA2PTE(pa) | flags;
+    }
+    // printf("nice");
+    change_page_count((void*)pa,0); // increase count of mapping the page 
+    // map the new page to the old page 
+    if(mappages(new, i, PGSIZE, pa, flags) != 0){
+      // kfree(mem);
       goto err;
     }
   }
@@ -347,17 +359,26 @@ uvmclear(pagetable_t pagetable, uint64 va)
 
 // Copy from kernel to user.
 // Copy len bytes from src to virtual address dstva in a given page table.
-// Return 0 on success, -1 on error.
+// // Return 0 on success, -1 on error.
 int
 copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len)
 {
   uint64 n, va0, pa0;
+  pte_t *pte;
 
   while(len > 0){
     va0 = PGROUNDDOWN(dstva);
     pa0 = walkaddr(pagetable, va0);
     if(pa0 == 0)
       return -1;
+
+    pte = walk(pagetable, va0, 0);
+    // if the following if condition holds true then there is a page fault that write is being done
+    if (PTE_COW & PTE_FLAGS(*pte)){
+      handling_exception((void *)va0, pagetable);
+      pa0 = walkaddr(pagetable, va0);
+    }
+    
     n = PGSIZE - (dstva - va0);
     if(n > len)
       n = len;
