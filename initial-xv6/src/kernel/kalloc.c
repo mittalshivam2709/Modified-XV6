@@ -116,7 +116,7 @@ kalloc(void)
   if (r)
   {
     // printf("qwer");
-    change_page_count((void *)r, 0); // decrease the count because new page has been created
+    change_page_count((void *)r, 0); // increase the count because new page has been created
     memset((char *)r, 5, PGSIZE);    // fill with junk
   }
   return (void *)r;
